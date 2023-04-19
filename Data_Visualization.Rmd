@@ -1,0 +1,151 @@
+---
+title: "IJCAI Data Visualization"
+output: pdf_document
+date: "2023-01-05"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+```
+
+## Twitter Opinions
+First, we want to visualize the initial opinions from the Twitter network. In this code block, we load the Twitter data
+
+```{r cars}
+twitter_ops <- read.csv("twitter_init_op.csv")
+colnames(twitter_ops) <- c("init_ops")
+twitter_ops2 <- twitter_ops[1:200,]
+hist(twitter_ops$init_ops, main="Distribution of Initial Twitter Opinions", xlab = "Opinion Value")
+hist(twitter_ops2, main="Distribution of Initial Twitter Opinions, First 200", xlab = "Opinion Value")
+mean(twitter_ops$init_ops)
+sd(twitter_ops$init_ops)
+
+mean(twitter_ops2)
+sd(twitter_ops2)
+```
+
+
+
+## How do we expect opinions to change
+
+```{r}
+#Build an array of all possible opinions, 0-1, by 0.01
+op_seq <- seq(0, 1, by=0.01)
+
+
+
+df_ops <-as.data.frame(matrix(nrow=length(op_seq)^2,ncol=2))
+colnames(df_ops) <- c("op1", "op2")
+
+#create sequences of opinions, so we have all combinations of opinion interaction
+df_ops$op1 <- rep(op_seq, times = length(op_seq))
+df_ops$op2 <- rep(op_seq, each = length(op_seq))
+
+#Create the difference in opinion variable, which we'll use in the assimilation/boomerang/neutral calculation
+df_ops$diff = abs(df_ops$op1 - df_ops$op2)
+```
+
+### Creating the Opinion Change Function
+
+That requires first implementing a trust function.
+```{r}
+## trust <- function(x, d1, d2){
+##   
+##   ## Assimilation
+##   if(x < d1){
+##     trust = exp(((x - d1)^2)/(-(d1/log(2))^2) - 1)
+##   }
+##   
+##   ## Boomerang
+##   else if (x > d2){
+##     trust = 1 - exp(((x - d2)^2)/(-((1-d2)/(log(2)))^2))
+##   }
+##   
+##   ## Neutral
+##   else {
+##     trust = 0
+##   }
+##   return(trust)
+## }
+
+trust <- function(x, d1, d2){
+  
+  ifelse(x < d1,
+    trust = exp(((x - d1)^2)/(-(d1/log(2))^2) - 1), 
+    ifelse(x > d2, trust = 1 - exp(((x - d2)^2)/(-((1-d2)/(log(2)))^2)), trust = 0))
+    
+  return(trust)
+}
+```
+
+Then, we need to update the weight for the two agents. This is commutative, since the distance between opinions is the same regardless of which agent's opinion is actually changing. 
+
+```{r}
+weight_update <- function(wij, a, trust_val){
+  weight <- a*wij + (1-a)*trust_val
+  
+  return(weight)
+}
+```
+Finally, the opinion update equation. We will focus on the effect of one agent, instead of all of the neighbors at once. This isn't quite the same as summing all the neighbors weighted opinions, but for now, it's a start. 
+
+```{r}
+opinion_update <- function(wii, wij, xi, xj){
+  opinion <- (wii*xi + wij*xj)/(wii + wij)
+  
+  return(opinion)
+}
+```
+
+Then, we want to use these methods all at once, and write a column in the data frame. For now, we'll hold initial weight, $a$, $d_1$ and $d_2$ constant. 
+
+```{r}
+all_updates <- function(xi, xj, wii, wij, a, d1, d2){
+  diff <- abs(xi - xj)
+  new_trust <- trust(x=diff, d1 = d1, d2 = d2)
+  new_weight <- weight_update(wij = wij, a = a, trust_val = new_trust)
+  new_opinion <- opinion_update(wii = wii, wij = wij, xi = xi, xj = xj)
+  
+  return(new_opinion)
+}
+```
+
+Now that we have all of the functions written, we want to 
+
+```{r}
+df_ops$new_op1 <- all_updates(df_ops$op1, df_ops$op2, wii = 0.3, wij = 0.3, a = 0.5, d1 = 0.35, d2 = 0.8)
+```
+
+This is not working. 
+```{r}
+d1 = 0.3
+d2 = 0.7
+a = 0.5
+wii = 0.2
+wij = 0.4
+
+df_ops2 <- mutate(df_ops, Zone = ifelse(diff < d1, "Assimilation", 
+                                        ifelse(diff > d2, "Boomerang", "Neutral")))
+
+df_ops3 <- mutate(df_ops2, Trust = ifelse(diff < d1, exp(((diff - d1)^2)/(-(d1^2/log(2))) - 1), 
+                                          ifelse(diff > d2, 1 - exp(((diff - d2)^2)/((1-d2)^2/(log(2)))), 0)))
+
+df_ops4 <- mutate(df_ops3, Weight = a*wij + (1-a)*Trust)
+
+df_ops5 <- mutate(df_ops4, NewOp = (wii*op1 + wij*op2)/(wii + wij))
+  
+  
+## mutate(df_ops, Trust = ifelse(diff < d1,
+##   exp(((diff - d1)^2)/(-(d1/log(2))^2) - 1), 
+##   ifelse(abs(op1 - op2) > d2, 1 - exp(((abs(op1 - op2) - d2)^2)/(-((1-d2)/(log(2)))^2)), trust = 0)))
+```
+
+Now, we want to visualize how opinions change
+
+```{r}
+
+library(ggplot2)
+ggplot(df_ops5, aes(x=op1, y=op2, col = Weight)) + 
+  geom_point()
+```
